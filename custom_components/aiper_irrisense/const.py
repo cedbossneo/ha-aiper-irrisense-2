@@ -43,6 +43,20 @@ DEFAULT_MAP_REFRESH_HOURS: Final = 6
 DEFAULT_HISTORY_REFRESH_HOURS: Final = 6
 DEFAULT_REMINDER_REFRESH_HOURS: Final = 24
 
+# ---- MQTT reconnection / health watchdog ----------------------------------
+# At boot (e.g. after a whole-house power cut) the router may not have internet
+# yet, so the first MQTT connect can fail. Retry a bounded number of times
+# before handing off to the coordinator's periodic health watchdog.
+MQTT_SETUP_MAX_ATTEMPTS: Final = 5
+MQTT_SETUP_RETRY_SECONDS: Final = 30
+# The AWS IoT SDK's own auto-reconnect re-signs the WebSocket URL with the
+# STALE Cognito IAM credentials it was configured with. Those expire after
+# ~55 min (see IrrisenseApi._aws_credentials_exp), so after a long outage the
+# SDK loops forever on a 403. When the connection has been silently idle for
+# longer than this, the coordinator forces a clean teardown + reconnect that
+# fetches fresh credentials.
+MQTT_IDLE_RECONNECT_SECONDS: Final = 900  # 15 min
+
 # ---- MQTT topic patterns --------------------------------------------------
 # Same AWS IoT infrastructure as the pool cleaner integration — the Irrisense
 # takes the non-X9 "downChan"/"upChan" path confirmed from the decompiled APK.

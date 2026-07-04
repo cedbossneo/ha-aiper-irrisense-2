@@ -202,6 +202,11 @@ class IrrisenseApi:
         self._mqtt_client: Any = None
         self._mqtt_connected = False
         self.mqtt_debug = False
+        # Epoch seconds of the last MQTT frame we received (any topic). 0.0
+        # means "nothing yet". Used by the coordinator's health watchdog to
+        # detect a silently-stalled connection (half-open socket) that the
+        # SDK's own auto-reconnect can't recover from.
+        self._last_rx_ts: float = 0.0
 
         # Device cache
         self._devices: dict[str, dict] = {}
@@ -882,6 +887,68 @@ class IrrisenseApi:
     def is_mqtt_connected(self) -> bool:
         return bool(self._mqtt_connected and self._mqtt_client)
 
+    def seconds_since_last_rx(self) -> float | None:
+        """Seconds since the last inbound MQTT frame, or None if none yet.
+
+        A large value on an apparently-connected client signals a silently
+        stalled (half-open) socket the SDK hasn't noticed.
+        """
+        if self._last_rx_ts <= 0.0:
+            return None
+        return time.time() - self._last_rx_ts
+
+    def reconnect_mqtt(self) -> bool:
+        """Force a clean MQTT teardown + reconnect with FRESH credentials.
+
+        Called by the coordinator's health watchdog when the connection is
+        down (or silently stalled) and the SDK's own auto-reconnect can't
+        recover — most importantly after a network/power outage long enough
+        that the Cognito IAM credentials expired. The SDK re-signs the
+        WebSocket URL with the STALE creds it was configured with and loops
+        forever on a 403; recreating the client re-runs `_get_aws_credentials`
+        and gets a valid signature.
+
+        Blocking (calls `connect()` up to 30s) — invoke from an executor.
+        No-ops if a crash-shield recovery is already in progress.
+        """
+        with self._lock:
+            if self._reconnecting:
+                _LOGGER.debug("reconnect_mqtt: recovery already in progress; skipping")
+                return False
+            self._reconnecting = True
+        try:
+            old = self._mqtt_client
+            self._mqtt_client = None
+            self._mqtt_connected = False
+            if old is not None:
+                # Tearing the old client down makes its paho loop raise the
+                # familiar `AttributeError: 'NoneType'` on socket teardown.
+                # Pre-register one expected death so the excepthook absorbs it
+                # instead of spawning a redundant crash-shield worker.
+                with self._lock:
+                    self._expected_paho_deaths += 1
+                try:
+                    if hasattr(old, "configureConnectDisconnectTimeout"):
+                        old.configureConnectDisconnectTimeout(5)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    old.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+            _LOGGER.info(
+                "Forced MQTT reconnect: recreating client with fresh credentials"
+            )
+            # connect_mqtt()'s onOnline callback replays subscriptions.
+            return self.connect_mqtt()
+        finally:
+            # Let any straggler paho death land while the expected-death credit
+            # is still live, mirroring the crash-shield worker.
+            time.sleep(0.5)
+            with self._lock:
+                self._reconnecting = False
+                self._expected_paho_deaths = 0
+
     # ------------------------------------------------------------------ #
     # Crash shield + online/offline visibility
     # ------------------------------------------------------------------ #
@@ -893,6 +960,9 @@ class IrrisenseApi:
             len(self._subscribed),
         )
         self._mqtt_connected = True
+        # Seed the last-received clock so the idle watchdog measures silence
+        # from the moment we came online, not from an old pre-outage frame.
+        self._last_rx_ts = time.time()
         # SDK preserves subs across its own reconnects, but a full recreate
         # via our crash-shield path needs them replayed explicitly.
         for sn, cb in list(self._subscribed.items()):
@@ -1108,6 +1178,9 @@ class IrrisenseApi:
             return out
 
         def on_message(client, userdata, message):  # noqa: ARG001
+            # Stamp every inbound frame so the health watchdog can tell a live
+            # connection from a silently-stalled one.
+            self._last_rx_ts = time.time()
             try:
                 raw = message.payload
                 text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)

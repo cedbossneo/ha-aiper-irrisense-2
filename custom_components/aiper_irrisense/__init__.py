@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
 import voluptuous as vol
 
@@ -162,7 +161,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.options.get(CONF_ENABLE_MQTT, True) and devices:
         entry.async_create_background_task(
             hass,
-            _async_setup_mqtt_background(hass, api, devices, coordinator),
+            _async_setup_mqtt_background(coordinator),
             f"aiper_irrisense_mqtt_setup_{entry.entry_id}",
         )
 
@@ -196,12 +195,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def _async_setup_mqtt_background(
-    hass: HomeAssistant,
-    api: IrrisenseApi,
-    devices: list[dict[str, Any]],
-    coordinator: IrrisenseCoordinator,
-) -> None:
+async def _async_setup_mqtt_background(coordinator: IrrisenseCoordinator) -> None:
     """MQTT connect + per-device subscribe, off the setup path.
 
     Issue #11: AWS IoT `connect_mqtt` is up to 30s blocking
@@ -211,22 +205,14 @@ async def _async_setup_mqtt_background(
     60s bootstrap window. Running this off the setup path keeps the
     integration responsive: entities come online via REST-only
     polling first, MQTT layers on as soon as the connect resolves.
+
+    Retries with backoff: after a whole-house power cut, HA often boots
+    before the router has internet, so the first connect can fail. If all
+    attempts fail here, the coordinator's per-poll health watchdog keeps
+    retrying (and also recovers later outages).
     """
     try:
-        mqtt_ok = await hass.async_add_executor_job(api.connect_mqtt)
-        if not mqtt_ok:
-            _LOGGER.warning("Irrisense MQTT connect failed — realtime disabled")
-            return
-        for dev in devices:
-            sn = dev.get("sn")
-            if not sn:
-                continue
-            await hass.async_add_executor_job(
-                api.subscribe_device, sn, coordinator.handle_mqtt_message
-            )
-            # Nudge the device to report current state.
-            await hass.async_add_executor_job(api.query_work_info, sn)
-            await hass.async_add_executor_job(api.request_shadow, sn)
+        await coordinator.async_start_mqtt(retry=True)
     except Exception:  # noqa: BLE001 - MQTT is optional; don't crash integration load
         _LOGGER.exception("Irrisense MQTT background setup failed")
 

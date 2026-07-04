@@ -32,6 +32,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import IrrisenseApi
 from .const import (
+    CONF_ENABLE_MQTT,
     CONF_HISTORY_REFRESH_HOURS,
     CONF_MAP_REFRESH_HOURS,
     CONF_POLL_INTERVAL,
@@ -43,6 +44,9 @@ from .const import (
     DEFAULT_REMINDER_REFRESH_HOURS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    MQTT_IDLE_RECONNECT_SECONDS,
+    MQTT_SETUP_MAX_ATTEMPTS,
+    MQTT_SETUP_RETRY_SECONDS,
     POINT_TIME_LOW,
     POINT_TIME_PRESETS,
     REGION_TYPE_POINT,
@@ -142,6 +146,10 @@ class IrrisenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._fast_interval = timedelta(seconds=DEFAULT_FAST_SCAN_INTERVAL)
         self._fast_until: float = 0.0
 
+        # Whether the realtime MQTT path is enabled for this account. Read
+        # once here; a change reloads the entry (see _async_update_listener).
+        self._mqtt_enabled = bool(entry.options.get(CONF_ENABLE_MQTT, True))
+
         super().__init__(
             hass,
             _LOGGER,
@@ -229,6 +237,96 @@ class IrrisenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         _LOGGER.debug("Fast-poll window enabled for %ss", duration)
 
     # ------------------------------------------------------------------ #
+    # MQTT lifecycle + health watchdog
+    # ------------------------------------------------------------------ #
+
+    async def async_start_mqtt(self, *, retry: bool = False) -> None:
+        """Connect MQTT and subscribe every device. Idempotent.
+
+        Used at setup (``retry=True`` — the router may still be booting after
+        a power cut) and, on ``retry=False``, as a plain bring-up. If every
+        attempt fails, the periodic health watchdog keeps trying on each poll.
+        """
+        if not self._mqtt_enabled or not self.devices:
+            return
+        attempts = MQTT_SETUP_MAX_ATTEMPTS if retry else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                ok = await self.hass.async_add_executor_job(self.api.connect_mqtt)
+            except Exception:  # noqa: BLE001 - MQTT is optional; never crash setup
+                _LOGGER.exception("MQTT connect attempt %d/%d raised", attempt, attempts)
+                ok = False
+            if ok:
+                await self._ensure_mqtt_subscribed()
+                return
+            if attempt < attempts:
+                _LOGGER.warning(
+                    "MQTT connect failed (attempt %d/%d); retrying in %ds",
+                    attempt, attempts, MQTT_SETUP_RETRY_SECONDS,
+                )
+                await asyncio.sleep(MQTT_SETUP_RETRY_SECONDS)
+        _LOGGER.warning(
+            "MQTT connect failed after %d attempt(s) — realtime disabled for "
+            "now; the health watchdog will keep retrying on each poll.",
+            attempts,
+        )
+
+    async def _ensure_mqtt_subscribed(self) -> None:
+        """Subscribe all devices and nudge each to report its current state.
+
+        ``subscribe_device`` is idempotent, so this is safe to call after
+        every (re)connect.
+        """
+        for dev in self.devices:
+            sn = dev.get("sn")
+            if not sn:
+                continue
+            await self.hass.async_add_executor_job(
+                self.api.subscribe_device, sn, self.handle_mqtt_message
+            )
+            # Kick the device to report — also refreshes state after a
+            # reconnect that followed an outage.
+            await self.hass.async_add_executor_job(self.api.query_work_info, sn)
+            await self.hass.async_add_executor_job(self.api.request_shadow, sn)
+
+    async def _check_mqtt_health(self) -> None:
+        """Reconnect MQTT if the link is down or has gone silently stale.
+
+        Runs once per poll. Two failure modes are covered:
+
+        * **Down** — ``is_mqtt_connected()`` is False (socket dropped and the
+          SDK's auto-reconnect is stuck, e.g. on expired credentials).
+        * **Stalled** — still marked connected but no frame has arrived for
+          ``MQTT_IDLE_RECONNECT_SECONDS`` (half-open socket the SDK hasn't
+          noticed).
+
+        Both are resolved by ``reconnect_mqtt`` (fresh credentials), after
+        which we re-subscribe. A crash-shield recovery already in progress
+        makes ``reconnect_mqtt`` a no-op, so the two paths don't collide.
+        """
+        if not self._mqtt_enabled or not self.devices:
+            return
+
+        reason: str | None = None
+        if not self.api.is_mqtt_connected():
+            reason = "link down"
+        else:
+            idle = self.api.seconds_since_last_rx()
+            if idle is not None and idle > MQTT_IDLE_RECONNECT_SECONDS:
+                reason = f"silent for {idle:.0f}s (> {MQTT_IDLE_RECONNECT_SECONDS}s)"
+
+        if reason is None:
+            return
+
+        _LOGGER.warning("MQTT health check: %s — forcing reconnect", reason)
+        try:
+            ok = await self.hass.async_add_executor_job(self.api.reconnect_mqtt)
+            if ok:
+                await self._ensure_mqtt_subscribed()
+        except Exception:  # noqa: BLE001 - MQTT recovery must never break the REST poll
+            _LOGGER.exception("MQTT health-check reconnect failed")
+
+    # ------------------------------------------------------------------ #
     # Update loop
     # ------------------------------------------------------------------ #
 
@@ -242,6 +340,11 @@ class IrrisenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             # Refresh device list on every pass (cheap; once a day would be
             # enough, but it also catches new devices being added).
             await self.hass.async_add_executor_job(self.api.get_devices)
+
+            # Keep the realtime MQTT link healthy. The SDK's own auto-reconnect
+            # cannot recover once the Cognito credentials expire mid-outage, so
+            # we detect a down/stalled link here and force a clean reconnect.
+            await self._check_mqtt_health()
 
             device_registry = dr.async_get(self.hass)
             for dev in self.devices:
