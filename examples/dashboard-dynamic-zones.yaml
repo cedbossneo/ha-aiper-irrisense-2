@@ -1,0 +1,85 @@
+# =============================================================================
+# IrriSense — Dynamic zone grid (auto-entities)
+# =============================================================================
+# A drop-in replacement for the hard-coded zone button grid in the other
+# example dashboards. Instead of one hand-written card per zone, this renders
+# ONE card per zone straight from the integration's dynamic `zones` attribute,
+# so adding / renaming / deleting a zone in the Aiper app updates the
+# dashboard automatically — no YAML edits.
+#
+# HOW IT WORKS
+# ------------
+# The integration exposes a per-device sensor:
+#     sensor.irrisense_<device>_zones
+# whose state is the zone count and whose `zones` attribute is a list:
+#     [{ id, name, type, type_label, dose_unit, default_dose_label,
+#        water_yield, point_time, n_points, is_running }, ...]
+# custom:auto-entities loops over that list and emits one button-card each.
+#
+# Tapping a zone selects it (drives the existing Watering Zone select); the
+# Dose select + Start button then act on that selection, exactly like the
+# static grid. The card tints when that zone is the one currently watering.
+#
+# REQUIRED HACS CARDS
+# -------------------
+#   custom:auto-entities   thomasloven/lovelace-auto-entities   (HACS default)
+#   custom:button-card     custom-cards/button-card             (HACS default)
+#
+# SETUP
+# -----
+# The `sn` variable below is set to `irrisense_front_lawn` (the device slug on
+# this account — check Developer Tools → States for `sensor.irrisense_<slug>_zones`
+# if yours differs). Paste this card into any dashboard view. Tapping a zone
+# selects it on the Watering Zone select; the Dose select + Start button then
+# act on that selection, exactly like the static grid.
+#
+# NOTE: the tap action uses `z.select_label` (e.g. "Area_front (Area)"), which
+# is the EXACT option string the Watering Zone select expects — not the bare
+# zone name.
+# =============================================================================
+
+type: custom:auto-entities
+card_param: cards
+card:
+  type: grid
+  columns: 2
+  square: false
+filter:
+  template: |
+    {% set sn = 'irrisense_front_lawn' %}
+    {% set zones = state_attr('sensor.' ~ sn ~ '_zones', 'zones') or [] %}
+    {% for z in zones %}
+    - type: custom:button-card
+      entity: select.{{ sn }}_watering_zone
+      name: {{ z.name }}
+      show_state: false
+      label: >-
+        {{ z.type_label }} · {{ z.default_dose_label }}
+      show_label: true
+      icon: >-
+        {{ 'mdi:sprinkler-variant' if z.is_running else 'mdi:sprinkler' }}
+      tap_action:
+        action: perform-action
+        perform_action: select.select_option
+        target:
+          entity_id: select.{{ sn }}_watering_zone
+        data:
+          option: "{{ z.select_label }}"
+      styles:
+        card:
+          - border-radius: 12px
+          - padding: 12px
+          # Highlight the zone that is currently watering, and the zone the
+          # user has selected on the Watering Zone select.
+          - border: >-
+              [[[ return {{ z.is_running | lower }}
+                    ? '2px solid var(--state-active-color, #0ea5e9)'
+                    : (states['select.{{ sn }}_watering_zone'].state === '{{ z.select_label }}'
+                        ? '1px solid var(--primary-color)'
+                        : '1px solid var(--divider-color)'); ]]]
+        name:
+          - font-weight: '600'
+        label:
+          - font-size: 12px
+          - color: var(--secondary-text-color)
+    {% endfor %}

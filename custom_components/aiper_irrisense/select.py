@@ -35,6 +35,7 @@ from .const import (
     REGION_TYPE_POINT,
     default_dose_label_for_region_type,
     dose_options_for_region_type,
+    zone_display_label,
 )
 from .coordinator import (
     SIGNAL_MAP_UPDATED,
@@ -109,14 +110,10 @@ class NozzleTypeSelect(IrrisenseEntity, SelectEntity):
 def _label_for_region(r: dict[str, Any]) -> str:
     """Build a stable display label for a zone.
 
-    We append the type tag (Area/Line/Point) so the user sees at-a-glance
-    which dose vocabulary is about to appear, and so duplicate names like
-    two "Point 1" zones remain distinguishable.
+    Delegates to the shared :func:`zone_display_label` so the select options
+    and the dynamic Zones sensor's ``select_label`` never drift apart.
     """
-    name = str(r.get("name") or f"Zone {r.get('id')}")
-    rtype = int(r.get("type", 0))
-    tag = {0: "Area", 1: "Line", 2: "Point"}.get(rtype, "Zone")
-    return f"{name} ({tag})"
+    return zone_display_label(r)
 
 
 class ZoneSelect(IrrisenseEntity, SelectEntity, RestoreEntity):

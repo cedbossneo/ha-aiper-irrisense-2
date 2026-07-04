@@ -194,6 +194,29 @@ def label_for_point_time(value: int | float | None) -> str | None:
     closest = min(POINT_TIME_LABELS, key=lambda p: abs(p - v))
     return POINT_TIME_LABELS[closest]
 
+
+# Region-type tag used in the zone display label (Area/Line/Point, with a
+# "Zone" fallback for any unexpected type).
+_REGION_TYPE_TAGS: Final[dict[int, str]] = {
+    REGION_TYPE_AREA: "Area",
+    REGION_TYPE_LINE: "Line",
+    REGION_TYPE_POINT: "Point",
+}
+
+
+def zone_display_label(region: dict) -> str:
+    """Canonical zone label — MUST match the Watering Zone select's options.
+
+    Format: ``"<name> (<Type>)"``, e.g. ``"Area_front (Area)"``. The type tag
+    disambiguates duplicate names and tells the user which dose vocabulary
+    applies. Both the `select` platform and the dynamic Zones sensor use this
+    so a card can drive `select.select_option` with the exact option string.
+    """
+    name = str(region.get("name") or f"Zone {region.get('id')}")
+    rtype = int(region.get("type", 0))
+    tag = _REGION_TYPE_TAGS.get(rtype, "Zone")
+    return f"{name} ({tag})"
+
 # ---- Status / Mode maps ---------------------------------------------------
 # setWorkMode.status: 1=start, 0=stop
 STATUS_RUNNING: Final = 1

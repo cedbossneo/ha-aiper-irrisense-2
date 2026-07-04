@@ -17,9 +17,19 @@ from homeassistant.const import EntityCategory, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    REGION_TYPE_POINT,
+    label_for_point_time,
+    label_for_water_yield,
+    zone_display_label,
+)
 from .coordinator import IrrisenseCoordinator
 from .entity import IrrisenseEntity
+
+# Region-type → human label, shared by the active-zone banner and the
+# dynamic Zones sensor.
+REGION_TYPE_LABELS: dict[int, str] = {0: "Area", 1: "Line", 2: "Point"}
 
 
 async def async_setup_entry(
@@ -46,6 +56,7 @@ async def async_setup_entry(
                 TotalWaterSavingSensor(coordinator, sn),
                 TotalWateringEventsSensor(coordinator, sn),
                 LastWateringZoneSensor(coordinator, sn),
+                ZonesSensor(coordinator, sn),
             ]
         )
     async_add_entities(entities)
@@ -135,6 +146,75 @@ class ActiveZoneSensor(IrrisenseEntity, SensorEntity):
             # yet). Dashboards should render "--:--" / hide the countdown
             # rather than tick down a fake 5 minutes.
             "duration_pending": state.get("duration_pending", False),
+        }
+
+
+# --------------------------------------------------------------------------- #
+# Dynamic zone list — one attribute-bearing sensor per device so a Lovelace
+# card (e.g. custom:auto-entities) can render whatever zones actually exist,
+# instead of hard-coding one card per zone. Rebuilds live from the cached
+# zone map, so adding / renaming / deleting a zone in the Aiper app flows
+# straight through to the dashboard.
+# --------------------------------------------------------------------------- #
+
+
+class ZonesSensor(IrrisenseEntity, SensorEntity):
+    """Number of configured zones, with the full zone list in attributes.
+
+    The ``zones`` attribute is a list of dicts — one per region from the
+    device's zone map — carrying everything a card needs to render and act:
+    id, name, region type (+ label), the default dose label for the zone's
+    type, and whether that zone is watering right now.
+    """
+
+    _attr_icon = "mdi:map-marker-multiple"
+    _attr_translation_key = "zones"
+
+    def __init__(self, coordinator: IrrisenseCoordinator, sn: str) -> None:
+        super().__init__(coordinator, sn, "zones")
+        self._attr_name = "Zones"
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.zones_for(self._sn))
+
+    def _zone_dose_label(self, region: dict[str, Any], rtype: int) -> str | None:
+        """Default dose/duration label for a zone, from its configured value."""
+        if rtype == REGION_TYPE_POINT:
+            return label_for_point_time(region.get("pointTime"))
+        return label_for_water_yield(region.get("waterYield"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        active = self.coordinator.active_zone_state(self._sn)
+        active_id = active.get("zone_id") if active and active.get("is_running") else None
+
+        zones: list[dict[str, Any]] = []
+        for r in self.coordinator.zones_for(self._sn):
+            zid = r.get("id")
+            rtype = int(r.get("type", 0))
+            zones.append(
+                {
+                    "id": zid,
+                    "name": r.get("name") or (f"Zone {zid}" if zid is not None else None),
+                    # Exact Watering Zone select option — drive
+                    # select.select_option with this to pick the zone.
+                    "select_label": zone_display_label(r),
+                    "type": rtype,
+                    "type_label": REGION_TYPE_LABELS.get(rtype, "Area"),
+                    "dose_unit": "min" if rtype == REGION_TYPE_POINT else "mm",
+                    "default_dose_label": self._zone_dose_label(r, rtype),
+                    "water_yield": r.get("waterYield"),
+                    "point_time": r.get("pointTime"),
+                    "n_points": r.get("n_points"),
+                    "is_running": zid is not None and zid == active_id,
+                }
+            )
+
+        return {
+            "zones": zones,
+            "active_zone_id": active_id,
+            "active_zone_name": active.get("zone_name") if active else None,
         }
 
 
