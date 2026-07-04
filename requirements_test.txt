@@ -1,0 +1,10 @@
+# Test dependencies for the Aiper Irrisense 2 integration.
+#
+# pytest-homeassistant-custom-component pulls in Home Assistant, pytest,
+# pytest-asyncio and the HA test fixtures (hass, MockConfigEntry, ...).
+# The three lines below mirror the integration's manifest `requirements`
+# so the modules import cleanly under test.
+pytest-homeassistant-custom-component
+AWSIoTPythonSDK>=1.5.0
+certifi>=2024.0.0
+requests>=2.31.0

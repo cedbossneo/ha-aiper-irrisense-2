@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Dynamic zone list for dashboards.** A new per-device sensor
+  `sensor.<device>_zones` exposes the live zone map as a `zones` attribute —
+  a list of `{id, name, select_label, type, type_label, dose_unit,
+  default_dose_label, water_yield, point_time, n_points, is_running}`. A
+  Lovelace card (e.g. `custom:auto-entities`) can render one card per zone
+  straight from this attribute, so adding / renaming / deleting a zone in the
+  Aiper app flows through to the dashboard with no YAML edits. See
+  `examples/dashboard-dynamic-zones.yaml`. The `select_label` field is the
+  exact Watering Zone select option, so a card can drive `select.select_option`
+  directly.
+- **Test suite.** A `pytest` harness (`pytest-homeassistant-custom-component`)
+  with CI on Python 3.12/3.13. Covers the MQTT reconnection paths, the
+  coordinator logic, all entity platforms, config flow and diagnostics.
+
+### Fixed
+
+- **MQTT reconnection after a power / network outage.** The realtime link no
+  longer stays dead after the connection drops. Previously the AWS IoT SDK's
+  own auto-reconnect re-signed the WebSocket URL with the stale Cognito
+  credentials it was configured with and looped forever once they expired
+  (~55 min), so after an outage entities only updated on the slow REST poll
+  until the integration was reloaded. Now the coordinator runs a per-poll MQTT
+  health watchdog that forces a clean teardown + reconnect (with fresh
+  credentials) when the link is down or has gone silently idle, and the
+  boot-time MQTT connect retries with backoff (the router is often still
+  offline when HA starts after a whole-house power cut).
+
 ## [0.3.0] — Bug fixes, point-zone watchdog, robust setup
 
 ### Added

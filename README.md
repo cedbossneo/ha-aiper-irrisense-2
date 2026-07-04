@@ -118,6 +118,19 @@ All three depend on these HACS frontend cards:
 
 Install those via HACS → Frontend before loading the dashboards.
 
+### Dynamic zone grid (no hard-coded zones)
+
+The example dashboards above hard-code one card per zone. To render the zone
+grid **dynamically** — so adding / renaming / deleting a zone in the Aiper app
+updates the dashboard automatically — use `examples/dashboard-dynamic-zones.yaml`.
+
+It reads the per-device sensor `sensor.<device>_zones`, whose `zones` attribute
+lists every zone with everything a card needs (`select_label`, `type_label`,
+`default_dose_label`, `is_running`, …), and loops over it with
+[`custom:auto-entities`](https://github.com/thomasloven/lovelace-auto-entities)
+(install via HACS → Frontend). Tapping a zone selects it, exactly like the
+static grid.
+
 ### Dual Dashboards side-by-side view
 
 Pop up cards when starting a watering zone, with Dosing or Duration based on Zone Type (Area & Line use mm, Point uses Minutes)
@@ -249,6 +262,23 @@ Files from `ha-aiper` that were particularly useful as a starting model:
 
 Huge thanks to [@kmich](https://github.com/kmich) — without that project
 as a reference, this one would have taken a lot longer to stand up.
+
+## Testing
+
+The test suite uses `pytest` with
+[`pytest-homeassistant-custom-component`](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component),
+which provides the Home Assistant test fixtures. It requires **Python 3.12+**
+(the pinned Home Assistant version does not run on older interpreters).
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements_test.txt
+pytest
+```
+
+CI runs the same suite on every push and pull request (see
+`.github/workflows/tests.yml`).
 
 ## Contributing
 
