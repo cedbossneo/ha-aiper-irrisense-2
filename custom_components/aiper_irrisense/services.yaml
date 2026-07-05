@@ -150,3 +150,27 @@ debug_publish:
               value: "0"
             - label: "1 (at least once, PUBACK required)"
               value: "1"
+
+delete_zone:
+  name: Delete zone
+  description: >
+    Permanently delete a zone (region) from the device's map (cloud REST
+    /wr/deleteMapRegion). Destructive and cannot be undone from Home Assistant.
+  fields:
+    sn:
+      name: Device serial
+      description: Serial number of the Irrisense 2
+      required: true
+      example: "WRX60500001"
+      selector:
+        text:
+    zone_id:
+      name: Zone ID
+      description: Region ID (from the zones sensor / zone map) to delete
+      required: true
+      example: 2
+      selector:
+        number:
+          min: 1
+          max: 64
+          mode: box

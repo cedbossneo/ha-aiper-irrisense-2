@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rendered map image** (`image.<device>_map`). A PNG of the zone map drawn
+  from the S3 map geometry (each region's `points[x,y]`, device at the
+  origin): filled polygons for Area zones, polylines for Line, markers for
+  Point, tinted by type, with the currently-watering zone highlighted. Shows
+  in any Picture card — no HACS dependency (rendered server-side via Pillow).
+- **`delete_zone` service** — permanently delete a zone from the device's map
+  via cloud REST (`/wr/deleteMapRegion`). Endpoint + schema confirmed from the
+  Aiper APK. (Zone *creation* is a Bluetooth-only flow on the device and is
+  not reproducible from Home Assistant; renaming requires re-uploading the
+  whole map file to S3 and is not yet implemented.)
+
 - **Dynamic zone list for dashboards.** A new per-device sensor
   `sensor.<device>_zones` exposes the live zone map as a `zones` attribute —
   a list of `{id, name, select_label, type, type_label, dose_unit,

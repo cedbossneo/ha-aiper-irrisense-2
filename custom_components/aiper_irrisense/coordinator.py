@@ -771,6 +771,27 @@ class IrrisenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             await self.async_request_refresh()
         return ok
 
+    async def async_delete_zone(self, sn: str, region_id: int) -> bool:
+        """Delete a zone (region) from the device's map via cloud REST.
+
+        Needs the mapId, captured from getMapList on the last map fetch. On
+        success we invalidate the map cache so the next poll drops the zone.
+        """
+        map_id = self.api.map_id_for(sn)
+        if map_id is None:
+            _LOGGER.warning(
+                "Cannot delete zone %s for %s: mapId unknown (map not fetched yet)",
+                region_id, sn,
+            )
+            return False
+        ok = await self.hass.async_add_executor_job(
+            self.api.delete_map_region, sn, map_id, [int(region_id)]
+        )
+        if ok:
+            self._last_map_fetch.pop(sn, None)
+            await self.async_request_refresh()
+        return ok
+
     async def async_set_nozzle_type(self, sn: str, nozzle_type: int) -> bool:
         ok = await self.hass.async_add_executor_job(
             self.api.set_nozzle_type, sn, nozzle_type

@@ -211,6 +211,8 @@ class IrrisenseApi:
         # Device cache
         self._devices: dict[str, dict] = {}
         self._device_zone_id_by_sn: dict[str, str] = {}
+        # mapId per SN, captured from getMapList (needed by /wr/deleteMapRegion).
+        self._map_id_by_sn: dict[str, int] = {}
 
         # MQTT subscription callbacks
         self._shadow_callbacks: dict[str, list[Callable]] = {}
@@ -572,6 +574,44 @@ class IrrisenseApi:
             _LOGGER.debug("WR write %s error: %s", path, err)
         return False
 
+    @staticmethod
+    def _map_id_from_list(info: Any) -> int | None:
+        """Pull the mapId from a getMapList response (List<MapLocationsFile>).
+
+        Each file entry carries ``id`` (the mapId) + ``mapUrl``. We take the
+        first entry's id — devices expose a single active map.
+        """
+        data = info.get("data") if isinstance(info, dict) else None
+        items = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+        for it in items:
+            if isinstance(it, dict):
+                raw = it.get("id") or it.get("mapId")
+                try:
+                    if raw is not None:
+                        return int(raw)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    def map_id_for(self, sn: str) -> int | None:
+        """mapId last seen for a device, or None if the map wasn't fetched yet."""
+        return self._map_id_by_sn.get(sn)
+
+    def delete_map_region(self, sn: str, map_id: int, region_ids: list[int]) -> bool:
+        """Delete one or more zones (regions) from the device's map.
+
+        Cloud REST: ``/wr/deleteMapRegion {sn, mapId, regionIdList}``
+        (confirmed from the APK ``WrApi.deleteMapRegion``). Destructive.
+        """
+        return self._wr_write(
+            "/wr/deleteMapRegion",
+            {
+                "sn": sn,
+                "mapId": int(map_id),
+                "regionIdList": [int(r) for r in region_ids],
+            },
+        )
+
     # -- Reads --
     def get_wr_equipment_info(self, sn: str) -> dict | None:
         """Irrisense-specific status (firmware, battery, active zone, etc.)."""
@@ -711,6 +751,10 @@ class IrrisenseApi:
             return None
 
         _LOGGER.debug("getMapList raw response for %s: %s", sn, info)
+
+        mid = self._map_id_from_list(info)
+        if mid is not None:
+            self._map_id_by_sn[sn] = mid
 
         url = _find_map_url(info)
         if not url:

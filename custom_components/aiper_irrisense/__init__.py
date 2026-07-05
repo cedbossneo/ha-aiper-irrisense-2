@@ -29,6 +29,7 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
     Platform.SELECT,
     Platform.BUTTON,
+    Platform.IMAGE,
 ]
 # Dose lives on the Watering Dose select (label-valued: "3 mm" / "5 min" / ...)
 # and backend mapping happens in button.StartWateringButton.
@@ -37,6 +38,7 @@ SERVICE_START_ZONE = "start_zone"
 SERVICE_STOP_ZONE = "stop_zone"
 SERVICE_QUERY_WORK_INFO = "query_work_info"
 SERVICE_DEBUG_PUBLISH = "debug_publish"
+SERVICE_DELETE_ZONE = "delete_zone"
 
 ATTR_SN = "sn"
 ATTR_ZONE_ID = "zone_id"
@@ -71,6 +73,13 @@ STOP_ZONE_SCHEMA = vol.Schema(
 )
 
 QUERY_WORK_SCHEMA = vol.Schema({vol.Required(ATTR_SN): cv.string})
+
+DELETE_ZONE_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_SN): cv.string,
+        vol.Required(ATTR_ZONE_ID): vol.Coerce(int),
+    }
+)
 
 DEBUG_PUBLISH_SCHEMA = vol.Schema(
     {
@@ -231,7 +240,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.async_add_executor_job(api.disconnect)
     # Only drop the services on the last entry
     if not hass.data.get(DOMAIN):
-        for svc in (SERVICE_START_ZONE, SERVICE_STOP_ZONE, SERVICE_QUERY_WORK_INFO, SERVICE_DEBUG_PUBLISH):
+        for svc in (SERVICE_START_ZONE, SERVICE_STOP_ZONE, SERVICE_QUERY_WORK_INFO, SERVICE_DELETE_ZONE, SERVICE_DEBUG_PUBLISH):
             if hass.services.has_service(DOMAIN, svc):
                 hass.services.async_remove(DOMAIN, svc)
     return unload_ok
@@ -284,6 +293,19 @@ def _register_services(hass: HomeAssistant) -> None:
             return
         await hass.async_add_executor_job(coord.api.query_work_info, sn)
 
+    async def _svc_delete_zone(call: ServiceCall) -> None:
+        sn = call.data[ATTR_SN]
+        coord = _find_coordinator(sn)
+        if not coord:
+            _LOGGER.error("delete_zone: unknown SN %s", sn)
+            return
+        ok = await coord.async_delete_zone(sn, int(call.data[ATTR_ZONE_ID]))
+        if not ok:
+            _LOGGER.warning(
+                "delete_zone: failed to delete zone %s on %s",
+                call.data[ATTR_ZONE_ID], sn,
+            )
+
     async def _svc_debug_publish(call: ServiceCall) -> None:
         """Diagnostic: publish arbitrary bytes to an arbitrary MQTT topic on
         the device's MQTT connection. Used to experiment with payload shapes
@@ -304,4 +326,5 @@ def _register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_START_ZONE, _svc_start_zone, schema=START_ZONE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_STOP_ZONE, _svc_stop_zone, schema=STOP_ZONE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_QUERY_WORK_INFO, _svc_query_work, schema=QUERY_WORK_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_DELETE_ZONE, _svc_delete_zone, schema=DELETE_ZONE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_DEBUG_PUBLISH, _svc_debug_publish, schema=DEBUG_PUBLISH_SCHEMA)
