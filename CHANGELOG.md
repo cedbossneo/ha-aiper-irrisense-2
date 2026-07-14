@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MQTT transport rewritten: `paho-mqtt` 2.x + SigV4 instead of
+  `AWSIoTPythonSDK`** (ported from fdebrus's fork). This fixes the persistent
+  "have to restart Home Assistant to get realtime back" problem at the root,
+  not with a watchdog band-aid on top of a broken SDK:
+  - Every reconnect attempt re-signs a **fresh** SigV4 WebSocket URL, so an
+    outage that outlives the Cognito credentials (~55 min) recovers instead of
+    looping on 403 forever. (The AWSIoTPythonSDK reused the stale presigned
+    URL.)
+  - paho 2.x reports socket teardown cleanly via `on_disconnect` — no more
+    paho-loop-thread `AttributeError` crash, so the whole process-wide
+    "crash-shield" excepthook is gone.
+  - Reconnection is driven by us (`reconnect_on_failure=False`) with an
+    exponential-backoff supervisor; the coordinator health watchdog stays as a
+    backstop for the half-open/silent case.
+  - `manifest.json`: `AWSIoTPythonSDK` → `paho-mqtt>=2.1.0` (Home Assistant
+    already ships paho-mqtt 2.x). New `aws_sigv4.py` (plain AWS SigV4,
+    verifiable against AWS's published test vectors).
+
 ### Added
 
 - **Rendered map image** (`image.<device>_map`). A PNG of the zone map drawn
